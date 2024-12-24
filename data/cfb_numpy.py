@@ -1,3 +1,5 @@
+# Fetch data from college football API and save in CSV file
+# in a separate script (create_dataset.py), we will split data by week and prepare data for training
 import requests
 import numpy as np
 import os
@@ -12,17 +14,33 @@ HEADERS = {"Authorization": f"Bearer {API_KEY}"}
 
 # Constants
 start_year = 2005
-end_year = 2005 # 2023
+end_year = 2023 
 current_week = 13  
 
-all_data = []
-
+# Define dtype to match CSV format exactly
 all_data_dtype = np.dtype([
-    ('teamName', 'U100'), ('record', 'U10'), ('fpi', 'f8'), ('strengthOfRecord', 'f8'), 
-    ('averageWinProbability', 'f8'), ('strengthOfSchedule', 'f8'), ('gameControl', 'f8'), 
-    ('overallEfficiency', 'f8'), ('offenseEfficiency', 'f8'), ('defenseEfficiency', 'f8'), 
-    ('specialTeamsEfficiency', 'f8'), ('apRank', 'i4'), ('coachesRank', 'i4'), ('weekNumber', 'i4'), ('seasonYear', 'i4')
+    ('teamName', 'U100'),
+    ('record', 'U10'),
+    ('fpi', 'U20'),  
+    ('strengthOfRecord', 'U20'),
+    ('averageWinProbability', 'U20'),
+    ('strengthOfSchedule', 'U20'),
+    ('gameControl', 'U20'),
+    ('overallEfficiency', 'U20'),  
+    ('offenseEfficiency', 'U20'),  
+    ('defenseEfficiency', 'U20'),  
+    ('specialTeamsEfficiency', 'U20'), 
+    ('apRank', 'U20'),  
+    ('coachesRank', 'U20'), 
+    ('weekNumber', 'i4'), 
+    ('seasonYear', 'i4')  
 ])
+
+# optimization: pre-allocate numpy array w/ empty data 
+# num_rows = (seasons) * (weeks) * (teams) = (2023-2005+1) * 13 * 130
+# - a safer way to calculate teams is to fetch number of teams from API but... nah too much work
+# then, we can just update indexes instead of expensive appends
+all_data = np.array([], dtype=all_data_dtype)
 
 def get_fpi_stats(season): 
     response_fpi = requests.get(
@@ -82,7 +100,7 @@ def get_polls(season, week):
     )
 
     if response_polls.status_code != 200:
-        print(f"Failed to fetch AP rankings for week {week} of season {season}: {response_polls.status_code}")
+        print(f"Failed to fetch rankings for week {week} of season {season}: {response_polls.status_code}")
         return np.array([]), np.array([])
 
     rankings_data = response_polls.json()
@@ -190,23 +208,27 @@ for season in range(start_year, end_year + 1):
             ap_rank = ap_rankings[ap_mask]['rank'][0] if any(ap_mask) else "Unranked"
             coaches_rank = coaches_rankings[coaches_mask]['rank'][0] if any(coaches_mask) else "Unranked"
 
-            all_data.append([
+            
+
+            new_row = np.array([(
                 team_name,
                 record, 
-                fpi_detail['fpi'] if fpi_detail else "N/A",
-                fpi_detail['strengthOfRecord'] if fpi_detail else "N/A",
-                fpi_detail['averageWinProbability'] if fpi_detail else "N/A",
-                fpi_detail['strengthOfSchedule'] if fpi_detail else "N/A",
-                fpi_detail['gameControl'] if fpi_detail else "N/A",
-                fpi_detail['overall_efficiency'] if fpi_detail else "N/A",
-                fpi_detail['offense_efficiency'] if fpi_detail else "N/A",
-                fpi_detail['defense_efficiency'] if fpi_detail else "N/A",
-                fpi_detail['specialTeams_efficiency'] if fpi_detail else "N/A",
-                ap_rank,
-                coaches_rank,
+                str(fpi_detail['fpi'] if fpi_detail else "N/A"),
+                str(fpi_detail['strengthOfRecord'] if fpi_detail else "N/A"),
+                str(fpi_detail['averageWinProbability'] if fpi_detail else "N/A"),
+                str(fpi_detail['strengthOfSchedule'] if fpi_detail else "N/A"),
+                str(fpi_detail['gameControl'] if fpi_detail else "N/A"),
+                str(fpi_detail['overall_efficiency'] if fpi_detail else "N/A"),
+                str(fpi_detail['offense_efficiency'] if fpi_detail else "N/A"),
+                str(fpi_detail['defense_efficiency'] if fpi_detail else "N/A"),
+                str(fpi_detail['specialTeams_efficiency'] if fpi_detail else "N/A"),
+                str(ap_rank),
+                str(coaches_rank),
                 week,
                 season
-            ])
+            )], dtype=all_data_dtype)
+            
+            all_data = np.concatenate((all_data, new_row))
 
 # Save data as csv
 # note that model expects week-splitted data, but to ensure ease of use, we save as a CSV and post-process it for model input
