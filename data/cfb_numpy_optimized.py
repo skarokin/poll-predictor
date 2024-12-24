@@ -5,13 +5,14 @@ import numpy as np
 import os
 from dotenv import load_dotenv
 
+# simply loops through game data and finds largest 'week' value
 def max_weeks_in_year(games_data):
     max_week = 0
     for game in games_data:
         max_week = max(max_week, game['week'])
     return max_week
 
-# optimization: pre-allocate numpy array w/ empty data 
+# this is for the pre-allocation optimization
 # we have to directly calculate the number of weeks in the season
 # to ensure we don't miss any games
 def get_number_of_rows(START_YEAR, END_YEAR, API_BASE_URL, HEADERS):
@@ -143,22 +144,30 @@ def get_game_results(season, week, API_BASE_URL, HEADERS):
     
     games = response_games.json()
 
-    dtype = [('teamName', 'U100'), ('wins', 'i4'), ('losses', 'i4')]
+    dtype = [('teamName', 'U100'), ('wins', 'i4'), ('losses', 'i4'), ('postWinProb', 'U20')]
     game_results = []
 
     for game in games:
-        for team, _, points, opp_points in [
-                        (game["home_team"], game["away_team"], game.get("home_points"), game.get("away_points")),
-                        (game["away_team"], game["home_team"], game.get("away_points"), game.get("home_points")),
+        for team, _, points, opp_points, home_post_win_prob, away_post_win_prob in [
+                        (game["home_team"], game["away_team"], game.get("home_points"), game.get("away_points"), game.get("home_post_win_prob"), game.get("away_post_win_prob")),
+                        (game["away_team"], game["home_team"], game.get("away_points"), game.get("home_points"), game.get("away_post_win_prob"), game.get("home_post_win_prob"))
                     ]:
                 points = points or 0
                 opp_points = opp_points or 0
 
+                win_prob = home_post_win_prob if team == game["home_team"] else away_post_win_prob
+
                 if points > opp_points:
-                    game_results.append((team, 1, 0))
+                    game_results.append((team, 1, 0, win_prob))
                 elif points < opp_points:
-                    game_results.append((team, 0, 1))
+                    game_results.append((team, 0, 1, win_prob))
                 # if tie, don't update
+                # if youre wondering why i don't just do something like...
+                #   data = None
+                #   if ...: data = (team, 1, 0, win_prob)
+                #   elif ...: data = (team, 0, 1, win_prob)
+                #   game_results.append(data)
+                # it's because if there's a tie then we don't want to update the record at all, just return empty np array
     
     return np.array(game_results, dtype=dtype)
 
@@ -166,46 +175,41 @@ def get_game_results(season, week, API_BASE_URL, HEADERS):
 # if ranked but moved out of top 25, trend is (old rank - 26) 
 def calculate_rank_trend(all_data):
     def rank_to_num(rank_str):
-        try:
-            return 26 if (rank_str == 'Unranked' or rank_str == '') else int(rank_str)
-        except ValueError:
+        if rank_str == 'Unranked' or rank_str == '' or rank_str == 'N/A':
             return 26
-        
+        try:
+            return int(rank_str)
+        except:
+            return 26
+
     ap_trends = np.zeros(len(all_data), dtype=np.int32)
     coaches_trends = np.zeros(len(all_data), dtype=np.int32)
-
-    current_team = None
-    current_season = None
-    prev_ap_rank = None
-    prev_coaches_rank = None
-
-    for i, row in enumerate(all_data):
+    
+    # store last known rank for each team in the season
+    last_known_ranks = {}  # key will be (team_name, season)
+    
+    # sort data by team, season, and week (shouldnt be necessary but just in case)
+    sorted_indices = np.argsort(all_data, order=['teamName', 'seasonYear', 'weekNumber'])
+    
+    # simply iterate through sorted data, if we have a previous rank then calculate trend as described above 
+    # year being part of the key allows us to reset the rank when new season starts. yessss
+    for idx in sorted_indices:
+        row = all_data[idx]
         team = row['teamName']
         season = row['seasonYear']
+        key = (team, season)
         
-        # Reset previous ranks when team or season changes
-        if team != current_team or season != current_season:
-            prev_ap_rank = None
-            prev_coaches_rank = None
-            current_team = team
-            current_season = season
+        current_ap = rank_to_num(row['apRank'])
+        current_coaches = rank_to_num(row['coachesRank'])
         
-        # Calculate trends
-        current_ap_rank = rank_to_num(row['apRank'])
-        current_coaches_rank = rank_to_num(row['coachesRank'])
-        
-        if prev_ap_rank is not None:
-            ap_trends[all_data[i]] = prev_ap_rank - current_ap_rank
-        
-        if prev_coaches_rank is not None:
-            coaches_trends[all_data[i]] = prev_coaches_rank - current_coaches_rank
-        
-        # Update previous ranks
-        prev_ap_rank = current_ap_rank
-        prev_coaches_rank = current_coaches_rank
+        if key in last_known_ranks:
+            prev_ap, prev_coaches = last_known_ranks[key]
+            ap_trends[idx] = prev_ap - current_ap
+            coaches_trends[idx] = prev_coaches - current_coaches
+            
+        last_known_ranks[key] = (current_ap, current_coaches)
     
     return ap_trends, coaches_trends
-
 
 def get_data(START_YEAR, END_YEAR, API_BASE_URL, HEADERS, all_data_dtype, all_data, current_index):
     # Populate data by season year and week
@@ -216,7 +220,7 @@ def get_data(START_YEAR, END_YEAR, API_BASE_URL, HEADERS, all_data_dtype, all_da
         fpi_stats = get_fpi_stats(season, API_BASE_URL, HEADERS)
 
         # keep track of yearly team wins separately
-        yearly_team_wins = np.array([], dtype=[('teamName', 'U100'), ('wins', 'i4'), ('losses', 'i4')])
+        yearly_team_wins = np.array([], dtype=[('teamName', 'U100'), ('wins', 'i4'), ('losses', 'i4'), ('postWinProb', 'U20')])
 
         # Fetch game data for this season to calculate number of weeks for below loop
         games_response = requests.get(
@@ -237,11 +241,9 @@ def get_data(START_YEAR, END_YEAR, API_BASE_URL, HEADERS, all_data_dtype, all_da
             print(f"  Processing week {week} of season {season}...")
 
             # Fetch AP and Coaches Poll rankings for the week
-            # - dictionaries with team names as keys and rankings as values
             ap_rankings, coaches_rankings = get_polls(season, week, API_BASE_URL, HEADERS)
 
-            # Fetch game results for the week
-            # - a dictionary with team names as keys and a bunch of stats as values
+            # Fetch game results (won or lost and post-game probability)
             weekly_team_stats = get_game_results(season, week, API_BASE_URL, HEADERS)
 
             # Update yearly_team_wins with the weekly results
@@ -253,12 +255,13 @@ def get_data(START_YEAR, END_YEAR, API_BASE_URL, HEADERS, all_data_dtype, all_da
                     yearly_team_wins['losses'][team_mask] += result['losses']
                 else:
                     # Add new team to yearly_team_wins
-                    new_entry = np.array([(result['teamName'], result['wins'], result['losses'])], dtype=yearly_team_wins.dtype)
+                    new_entry = np.array([(result['teamName'], result['wins'], result['losses'], result['postWinProb'])], dtype=yearly_team_wins.dtype)
                     yearly_team_wins = np.append(yearly_team_wins, new_entry)
 
             for team in yearly_team_wins:
                 record = f"{team['wins']}-{team['losses']}"
                 team_name = team['teamName']
+                post_win_prob = team['postWinProb']
 
                 fpi_mask = fpi_stats['teamName'] == team_name
                 fpi_detail = fpi_stats[fpi_mask][0] if any(fpi_mask) else None
@@ -273,6 +276,7 @@ def get_data(START_YEAR, END_YEAR, API_BASE_URL, HEADERS, all_data_dtype, all_da
                     week,
                     season,
                     record, 
+                    str(post_win_prob) if post_win_prob else "N/A",
                     str(fpi_detail['fpi'] if fpi_detail else "N/A"),
                     str(fpi_detail['strengthOfRecord'] if fpi_detail else "N/A"),
                     str(fpi_detail['averageWinProbability'] if fpi_detail else "N/A"),
@@ -297,9 +301,7 @@ def get_data(START_YEAR, END_YEAR, API_BASE_URL, HEADERS, all_data_dtype, all_da
 
     # final step: calculate weekly trend for AP and Coaches Poll rankings
     trends = calculate_rank_trend(all_data)
-    # no need for a mask here since calculate_rank_trend already takes care of matching 
-    # team and season with their trend, just replace the columns in all_data
-    print(trends)
+
     all_data['apRankTrend'] = trends[0]
     all_data['coachesRankTrend'] = trends[1]
 
@@ -315,14 +317,15 @@ def main():
 
     # Constants
     START_YEAR = 2005
-    END_YEAR = 2005
+    END_YEAR = 2023
 
-    # Define dtype to match CSV format exactly
+    # we use strings for all fields that sometimes have missing data
     all_data_dtype = np.dtype([
         ('teamName', 'U100'),
         ('weekNumber', 'i4'), 
-        ('seasonYear', 'i4'),
+        ('seasonYear', 'i4'), 
         ('record', 'U10'),
+        ('postWinProb', 'U20'),
         ('fpi', 'U20'),  
         ('strengthOfRecord', 'U20'),
         ('averageWinProbability', 'U20'),
@@ -339,8 +342,7 @@ def main():
     ])
 
     num_rows = get_number_of_rows(START_YEAR, END_YEAR, API_BASE_URL, HEADERS)
-    print(f"Total number of rows: {num_rows}")
-    all_data = np.zeros(num_rows, dtype=all_data_dtype)
+    all_data = np.zeros(num_rows, dtype=all_data_dtype)  # pre-allocated for performance
     current_index = 0
 
     all_data = get_data(START_YEAR, END_YEAR, API_BASE_URL, HEADERS, all_data_dtype, all_data, current_index)
@@ -349,7 +351,7 @@ def main():
     # note that model expects week-splitted data, but to ensure ease of use, we save as a CSV and post-process it for model input
     np.savetxt(
         "college_football_stats_with_detailed_fpi_and_ap_2005_to_2023_weekly_numpy.csv", 
-        all_data, # don't take the safety buffer 
+        all_data,
         delimiter=',', 
         fmt='%s', 
         header=','.join(all_data_dtype.names), 
