@@ -317,7 +317,7 @@ def main():
 
     # Constants
     START_YEAR = 2005
-    END_YEAR = 2023
+    END_YEAR = 2024
 
     # we use strings for all fields that sometimes have missing data
     all_data_dtype = np.dtype([
@@ -350,7 +350,7 @@ def main():
     # Save data as csv
     # note that model expects week-splitted data, but to ensure ease of use, we save as a CSV and post-process it for model input
     np.savetxt(
-        "college_football_stats_with_detailed_fpi_and_ap_2005_to_2023_weekly_numpy.csv", 
+    "cfb_2005_2024.csv", 
         all_data,
         delimiter=',', 
         fmt='%s', 
@@ -360,4 +360,5 @@ def main():
 
     print("Data export complete!")
 
-main()
+if __name__ == '__main__':
+    main()
