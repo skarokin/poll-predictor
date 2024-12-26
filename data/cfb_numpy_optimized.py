@@ -1,5 +1,9 @@
 # Fetch data from college football API and save in CSV file
 # in a separate script (create_dataset.py), we will split data by week and prepare data for training
+# *************************
+# NOTE: San José state shows up as San Jos(unknown character) State. I simply went into the CSV and used replace-all-occurrences..
+#       This is because we want UTF-8 encoding
+# *************************
 import requests
 import numpy as np
 import os
@@ -144,11 +148,11 @@ def get_game_results(season, week, API_BASE_URL, HEADERS):
     
     games = response_games.json()
 
-    dtype = [('teamName', 'U100'), ('wins', 'i4'), ('losses', 'i4'), ('postWinProb', 'U20')]
+    dtype = [('teamName', 'U100'), ('opponentTeamName', 'U100'), ('wins', 'i4'), ('losses', 'i4'), ('postWinProb', 'U20'), ('homePoints', 'i4'), ('awayPoints', 'i4'), ('isHome', 'bool'), ('didWin', 'bool')]
     game_results = []
 
     for game in games:
-        for team, _, points, opp_points, home_post_win_prob, away_post_win_prob in [
+        for team, opponent, points, opp_points, home_post_win_prob, away_post_win_prob in [
                         (game["home_team"], game["away_team"], game.get("home_points"), game.get("away_points"), game.get("home_post_win_prob"), game.get("away_post_win_prob")),
                         (game["away_team"], game["home_team"], game.get("away_points"), game.get("home_points"), game.get("away_post_win_prob"), game.get("home_post_win_prob"))
                     ]:
@@ -157,10 +161,17 @@ def get_game_results(season, week, API_BASE_URL, HEADERS):
 
                 win_prob = home_post_win_prob if team == game["home_team"] else away_post_win_prob
 
+                is_home = team == game["home_team"]
+
+                opponent = game["away_team"] if is_home else game["home_team"]
+
+                home_points = points if is_home else opp_points
+                away_points = points if not is_home else opp_points
+
                 if points > opp_points:
-                    game_results.append((team, 1, 0, win_prob))
+                    game_results.append((team, opponent, 1, 0, win_prob, home_points, away_points, is_home, True))
                 elif points < opp_points:
-                    game_results.append((team, 0, 1, win_prob))
+                    game_results.append((team, opponent, 0, 1, win_prob, home_points, away_points, is_home, False))
                 # if tie, don't update
                 # if youre wondering why i don't just do something like...
                 #   data = None
@@ -219,8 +230,9 @@ def get_data(START_YEAR, END_YEAR, API_BASE_URL, HEADERS, all_data_dtype, all_da
         # Fetch FPI statistics for this season
         fpi_stats = get_fpi_stats(season, API_BASE_URL, HEADERS)
 
-        # keep track of yearly team wins separately
-        yearly_team_wins = np.array([], dtype=[('teamName', 'U100'), ('wins', 'i4'), ('losses', 'i4'), ('postWinProb', 'U20')])
+        # any data that accumulates or changes weekly should be reset for each season
+        game_and_team_data = np.array([], dtype=[('teamName', 'U100'), ('opponentTeamName', 'U100'), ('wins', 'i4'), ('losses', 'i4'), ('postWinProb', 'U20'),
+                                          ('homePoints', 'i4'), ('awayPoints', 'i4'), ('isHome', 'bool'), ('didWin', 'bool')])
 
         # Fetch game data for this season to calculate number of weeks for below loop
         games_response = requests.get(
@@ -246,22 +258,36 @@ def get_data(START_YEAR, END_YEAR, API_BASE_URL, HEADERS, all_data_dtype, all_da
             # Fetch game results (won or lost and post-game probability)
             weekly_team_stats = get_game_results(season, week, API_BASE_URL, HEADERS)
 
-            # Update yearly_team_wins with the weekly results
+            # Update game_and_team_data with the weekly results
             for result in weekly_team_stats:
-                team_mask = yearly_team_wins['teamName'] == result['teamName']
+                team_mask = game_and_team_data['teamName'] == result['teamName']
                 if any(team_mask):
                     # Update wins and losses for the existing team
-                    yearly_team_wins['wins'][team_mask] += result['wins']
-                    yearly_team_wins['losses'][team_mask] += result['losses']
-                else:
-                    # Add new team to yearly_team_wins
-                    new_entry = np.array([(result['teamName'], result['wins'], result['losses'], result['postWinProb'])], dtype=yearly_team_wins.dtype)
-                    yearly_team_wins = np.append(yearly_team_wins, new_entry)
+                    game_and_team_data['opponentTeamName'][team_mask] = result['opponentTeamName']
+                    game_and_team_data['wins'][team_mask] += result['wins']
+                    game_and_team_data['losses'][team_mask] += result['losses']
+                    game_and_team_data['postWinProb'][team_mask] = result['postWinProb']
+                    game_and_team_data['homePoints'][team_mask] = result['homePoints']
+                    game_and_team_data['awayPoints'][team_mask] = result['awayPoints']
+                    game_and_team_data['isHome'][team_mask] = result['isHome']
+                    game_and_team_data['didWin'][team_mask] = result['didWin']
 
-            for team in yearly_team_wins:
+                else:
+                    # Add new team to game_and_team_data
+                    new_entry = np.array([(result['teamName'], result['opponentTeamName'], result['wins'], result['losses'], result['postWinProb'],
+                                          result['homePoints'], result['awayPoints'], result['isHome'], result['didWin'])],
+                                         dtype=game_and_team_data.dtype)
+                    game_and_team_data = np.append(game_and_team_data, new_entry)
+
+            for team in game_and_team_data:
                 record = f"{team['wins']}-{team['losses']}"
                 team_name = team['teamName']
-                post_win_prob = team['postWinProb']
+                opponent_team_name = team['opponentTeamName']
+                post_win_prob = team['postWinProb'] if team['postWinProb'] else "N/A"
+                home_points = team['homePoints']
+                away_points = team['awayPoints']
+                is_home = team['isHome']
+                did_win = team['didWin']
 
                 fpi_mask = fpi_stats['teamName'] == team_name
                 fpi_detail = fpi_stats[fpi_mask][0] if any(fpi_mask) else None
@@ -276,7 +302,12 @@ def get_data(START_YEAR, END_YEAR, API_BASE_URL, HEADERS, all_data_dtype, all_da
                     week,
                     season,
                     record, 
+                    opponent_team_name,
                     str(post_win_prob) if post_win_prob else "N/A",
+                    home_points,
+                    away_points,
+                    is_home,
+                    did_win,
                     str(fpi_detail['fpi'] if fpi_detail else "N/A"),
                     str(fpi_detail['strengthOfRecord'] if fpi_detail else "N/A"),
                     str(fpi_detail['averageWinProbability'] if fpi_detail else "N/A"),
@@ -307,6 +338,10 @@ def get_data(START_YEAR, END_YEAR, API_BASE_URL, HEADERS, all_data_dtype, all_da
 
     return all_data
 
+# *************************
+# NOTE: San José state shows up as San Jos(unknown character) State. I simply went into the CSV and used replace-all-occurrences..
+#       This is because we want UTF-8 encoding
+# *************************
 def main():
     # Load environment variables
     load_dotenv()
@@ -325,7 +360,12 @@ def main():
         ('weekNumber', 'i4'), 
         ('seasonYear', 'i4'), 
         ('record', 'U10'),
+        ('opponentTeamName', 'U100'),
         ('postWinProb', 'U20'),
+        ('homePoints', 'i4'),
+        ('awayPoints', 'i4'),
+        ('isHome', 'bool'),
+        ('didWin', 'bool'),
         ('fpi', 'U20'),  
         ('strengthOfRecord', 'U20'),
         ('averageWinProbability', 'U20'),
