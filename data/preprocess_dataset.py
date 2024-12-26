@@ -120,10 +120,13 @@ def main():
 
     training_ready = preprocess(data)
 
-    pd.set_option('display.max_columns', None)
-    pd.set_option('display.max_rows', None)
-    pd.set_option('display.width', None)
-    print('data preprocessed\n', training_ready)
+    # pd.set_option('display.max_columns', None)
+    # pd.set_option('display.max_rows', None)
+    # pd.set_option('display.width', None)
+    # print('data preprocessed\n', training_ready)
+
+    training_ready.to_csv('cfb_2005_2024_preprocessed.csv', index=False)
+    ground_truth.to_csv('ground_truth.csv', index=False)
     
 if __name__ == '__main__':
     main()
