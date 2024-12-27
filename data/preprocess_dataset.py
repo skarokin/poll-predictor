@@ -110,8 +110,10 @@ def preprocess(data):
     opponent_data = opponent_data.drop(columns=['weekNumber', 'seasonYear', 'opponentTeamName', 
                                           'currentWeekId', 'nextWeekId', 'lastWeekId'])
     opponent_data.columns = ['opponent_' + col for col in opponent_data.columns]
+    # opponentTeamName is not needed anymore since we now have a column encoded as opponent_teamName
+    # (it was only needed to make this calculation, now we can drop)
     # merge
-    data = data.join(opponent_data) # works because order is preserved
+    data = data.join(opponent_data).drop(columns=['opponentTeamName'])
 
     # 8 - transform categorical data
     le_team = LabelEncoder()
@@ -123,8 +125,10 @@ def preprocess(data):
     le_week = LabelEncoder()
     data['weekNumber'] = le_week.fit_transform(data['weekNumber']).astype(int)
 
+    # LabelEncoder uses a hash, so same string encodes as same value
+    # this means we don't need to re-use teamName encoder for opponentTeamName
     le_opponent = LabelEncoder()
-    data['opponentTeamName'] = le_opponent.fit_transform(data['opponentTeamName']).astype(int)
+    data['opponent_teamName'] = le_opponent.fit_transform(data['opponent_teamName']).astype(int)
 
     return data
 
