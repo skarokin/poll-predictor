@@ -1,9 +1,10 @@
 import pandas as pd 
 import numpy as np
+from sklearn.preprocessing import LabelEncoder
 
 # ground truths are next week's apRank for each team at each week
 # note that coaches rank is our simulated community poll, and AP is the ground truth we chose
-def create_ground_truth(data):
+def create_keys_and_next_week(data):
     # create a key for current week
     data['currentWeekId'] = data['teamName'] + '_' + data['seasonYear'].astype(str) + '_' + (data['weekNumber']).astype(str)
     
@@ -20,10 +21,7 @@ def create_ground_truth(data):
     # even if the next week's game is not in the data (for example end of season), the nextWeekRank will be NaN
     data['nextWeekRank'] = data['nextWeekId'].map(all_week_ranks)
 
-    # create ground truth
-    ground_truth = data[['currentWeekId', 'nextWeekRank']]
-
-    return data, ground_truth
+    return data
 
 # transform raw data into trainable ata
 # 1. transform 'record' to 'winPercentage' (wins / total games)
@@ -33,10 +31,18 @@ def create_ground_truth(data):
 # 4. replace 'Unranked' with 26
 #   4a. add a new column 'wasRankedLastWeek' that is simply 1 if last week's rank was not 26, 0 otherwise
 # 5. scale weekly rank trends from -1 to 1 
-#      - max possible rank is 26 (unranked), min is 1, meaning trends range from [-25, 25]
-#      - so, divide by 25 to get [-1, 1]
+#   - max possible rank is 26 (unranked), min is 1, meaning trends range from [-25, 25]
+#   - so, divide by 25 to get [-1, 1]
 # 6. replace all N/A with 0 (this is okay because teams without data are known to be subpar anyways)
 # 7. give every row the opponent's data as well (easy with unique identifier)
+# 8. transform categorical data (teamName, week, seasonYear, opponentTeamName) to numerical indices with 
+#    sklearn.preprocessing.LabelEncoder
+#   - we won't be doing categorical embedding here... in the actual model code it will take in the dataset
+#     and convert to dense embeddings. this is because we want our model to learn the embeddings itself
+#     i.e. how much historical team data to use versus team's stats for most recent game.
+#     the final input will look like
+#       [team_vectors, season_vectors, week_vectors, numerical_features]
+#     where each vector is calculated separately then concatenated (or something else becuase concatenation might lead to overfitting)
 def preprocess(data):
     # 1 - record to winPercentage
     def record_to_win_percentage(record):
@@ -107,6 +113,19 @@ def preprocess(data):
     # merge
     data = data.join(opponent_data) # works because order is preserved
 
+    # 8 - transform categorical data
+    le_team = LabelEncoder()
+    data['teamName'] = le_team.fit_transform(data['teamName']).astype(int)
+
+    le_season = LabelEncoder()
+    data['seasonYear'] = le_season.fit_transform(data['seasonYear']).astype(int)
+
+    le_week = LabelEncoder()
+    data['weekNumber'] = le_week.fit_transform(data['weekNumber']).astype(int)
+
+    le_opponent = LabelEncoder()
+    data['opponentTeamName'] = le_opponent.fit_transform(data['opponentTeamName']).astype(int)
+
     return data
 
 def main():
@@ -115,9 +134,8 @@ def main():
     data = pd.read_csv(csv_path)
     data.sort_values(by=['seasonYear', 'weekNumber'], inplace=True)
 
-    data, ground_truth = create_ground_truth(data)
-    print('ground truth created')
-
+    # preprocess data
+    data = create_keys_and_next_week(data)
     training_ready = preprocess(data)
 
     # pd.set_option('display.max_columns', None)
@@ -125,6 +143,13 @@ def main():
     # pd.set_option('display.width', None)
     # print('data preprocessed\n', training_ready)
 
+    # get ground truth
+    ground_truth = training_ready[['teamName', 'weekNumber', 'seasonYear', 'nextWeekRank']]
+
+    # drop all non-required features
+    training_ready.drop(columns=['lastWeekId', 'nextWeekId', 'currentWeekId'], inplace=True)
+
+    # save training ready and ground truth
     training_ready.to_csv('cfb_2005_2024_preprocessed.csv', index=False)
     ground_truth.to_csv('ground_truth.csv', index=False)
     
