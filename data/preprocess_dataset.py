@@ -1,7 +1,7 @@
-import pandas as pd 
-import numpy as np
+import pandas as pd
+import numpy as np 
+import pickle
 from sklearn.preprocessing import LabelEncoder
-
 # ground truths are next week's apRank for each team at each week
 # note that coaches rank is our simulated community poll, and AP is the ground truth we chose
 def create_keys_and_next_week(data):
@@ -118,6 +118,9 @@ def preprocess(data):
     # 8 - transform categorical data
     le_team = LabelEncoder()
     data['teamName'] = le_team.fit_transform(data['teamName']).astype(int)
+    with open('team_encoder.pkl', 'wb') as f:
+        pickle.dump(le_team, f)
+
 
     le_season = LabelEncoder()
     data['seasonYear'] = le_season.fit_transform(data['seasonYear']).astype(int)
