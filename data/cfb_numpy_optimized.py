@@ -40,8 +40,8 @@ def get_number_of_rows(START_YEAR, END_YEAR, API_BASE_URL, HEADERS):
         max_week = max_weeks_in_year(games_data)
 
         for game in games_data:
-            teams.add(game['home_team'])
-            teams.add(game['away_team'])
+            teams.add(game['homeTeam'])
+            teams.add(game['awayTeam'])
 
         season_rows = len(teams) * max_week
         num_rows += season_rows
@@ -152,26 +152,26 @@ def get_game_results(season, week, API_BASE_URL, HEADERS):
     game_results = []
 
     for game in games:
-        for team, opponent, points, opp_points, home_post_win_prob, away_post_win_prob in [
-                        (game["home_team"], game["away_team"], game.get("home_points"), game.get("away_points"), game.get("home_post_win_prob"), game.get("away_post_win_prob")),
-                        (game["away_team"], game["home_team"], game.get("away_points"), game.get("home_points"), game.get("away_post_win_prob"), game.get("home_post_win_prob"))
+        for team, opponent, points, opp_points, homePostgameWinProbability, awayPostgameWinProbability in [
+                        (game["homeTeam"], game["awayTeam"], game.get("homePoints"), game.get("awayPoints"), game.get("homePostgameWinProbability"), game.get("awayPostgameWinProbability")),
+                        (game["awayTeam"], game["homeTeam"], game.get("awayPoints"), game.get("homePoints"), game.get("awayPostgameWinProbability"), game.get("homePostgameWinProbability"))
                     ]:
                 points = points or 0
                 opp_points = opp_points or 0
 
-                win_prob = home_post_win_prob if team == game["home_team"] else away_post_win_prob
+                win_prob = homePostgameWinProbability if team == game["homeTeam"] else awayPostgameWinProbability
 
-                is_home = team == game["home_team"]
+                is_home = team == game["homeTeam"]
 
-                opponent = game["away_team"] if is_home else game["home_team"]
+                opponent = game["awayTeam"] if is_home else game["homeTeam"]
 
-                home_points = points if is_home else opp_points
-                away_points = points if not is_home else opp_points
+                homePoints = points if is_home else opp_points
+                awayPoints = points if not is_home else opp_points
 
                 if points > opp_points:
-                    game_results.append((team, opponent, 1, 0, win_prob, home_points, away_points, is_home, True))
+                    game_results.append((team, opponent, 1, 0, win_prob, homePoints, awayPoints, is_home, True))
                 elif points < opp_points:
-                    game_results.append((team, opponent, 0, 1, win_prob, home_points, away_points, is_home, False))
+                    game_results.append((team, opponent, 0, 1, win_prob, homePoints, awayPoints, is_home, False))
                 # if tie, don't update
                 # if youre wondering why i don't just do something like...
                 #   data = None
@@ -284,8 +284,8 @@ def get_data(START_YEAR, END_YEAR, API_BASE_URL, HEADERS, all_data_dtype, all_da
                 team_name = team['teamName']
                 opponent_team_name = team['opponentTeamName']
                 post_win_prob = team['postWinProb'] if team['postWinProb'] else "N/A"
-                home_points = team['homePoints']
-                away_points = team['awayPoints']
+                homePoints = team['homePoints']
+                awayPoints = team['awayPoints']
                 is_home = team['isHome']
                 did_win = team['didWin']
 
@@ -304,8 +304,8 @@ def get_data(START_YEAR, END_YEAR, API_BASE_URL, HEADERS, all_data_dtype, all_da
                     record, 
                     opponent_team_name,
                     str(post_win_prob) if post_win_prob else "N/A",
-                    home_points,
-                    away_points,
+                    homePoints,
+                    awayPoints,
                     is_home,
                     did_win,
                     str(fpi_detail['fpi'] if fpi_detail else "N/A"),

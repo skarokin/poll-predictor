@@ -9,74 +9,32 @@ import pickle
 import matplotlib.pyplot as plt
 from scipy.stats import spearmanr, kendalltau
 
-class RotaryPositionalEncoding(nn.Module):
-    def __init__(self, d_model):
+class MLPModel(nn.Module):
+    def __init__(self, input_dim, hidden_dim1=256, hidden_dim2=128, dropout_rate=0.2):
         super().__init__()
-        self.inv_freq = 1.0 / (10000 ** (torch.arange(0, d_model, 2).float() / d_model))
+        self.fc1 = nn.Linear(input_dim, hidden_dim1)
+        self.relu1 = nn.ReLU()
+        self.dropout1 = nn.Dropout(dropout_rate)
+        self.fc2 = nn.Linear(hidden_dim1, hidden_dim2)
+        self.relu2 = nn.ReLU()
+        self.dropout2 = nn.Dropout(dropout_rate)
+        self.fc3 = nn.Linear(hidden_dim2, 1)
 
     def forward(self, x):
-        seq_len = x.size(1)
-        # Move inv_freq to the same device as x
-        inv_freq_on_device = self.inv_freq.to(x.device)
-        freqs = torch.outer(torch.arange(seq_len, device=x.device), inv_freq_on_device)
-        sin, cos = torch.sin(freqs), torch.cos(freqs)
-        sin, cos = sin[:, None, :], cos[:, None, :]
-        x1, x2 = x[..., ::2], x[..., 1::2]
-        x_rot = torch.stack([x1 * cos - x2 * sin, x1 * sin + x2 * cos], dim=-1)
-        return x_rot.flatten(-2)
+        # x shape: (batch_size, num_teams_in_week, input_dim)
+        # We want to process each team independently to get a score
+        
+        # If batch_size is 1,
+        # x will be (1, num_teams_in_week, input_dim)
+        # We can squeeze the batch dimension if it's 1, or iterate if it's larger
+        # For simplicity with current setup, assuming batch_size=1 from DataLoader
+        if x.dim() == 3 and x.size(0) == 1:
+            x = x.squeeze(0) # Shape becomes (num_teams_in_week, input_dim)
 
-
-class MultiHeadSelfAttention(nn.Module):
-    def __init__(self, d_model, num_heads):
-        super().__init__()
-        self.depth = d_model // num_heads
-        self.num_heads = num_heads
-        self.qkv = nn.Linear(d_model, d_model * 3)
-        self.fc = nn.Linear(d_model, d_model)
-        self.rope = RotaryPositionalEncoding(self.depth)
-
-    def forward(self, x):
-        B, T, C = x.shape
-        qkv = self.qkv(x).reshape(B, T, 3, self.num_heads, self.depth).permute(2, 0, 3, 1, 4)
-        q, k, v = qkv[0], qkv[1], qkv[2]
-        q, k = self.rope(q), self.rope(k)
-        scores = (q @ k.transpose(-2, -1)) / (self.depth ** 0.5)
-        attn = torch.softmax(scores, dim=-1)
-        out = attn @ v
-        out = out.transpose(1, 2).reshape(B, T, C)
-        return self.fc(out)
-
-class EncoderBlock(nn.Module):
-    def __init__(self, d_model, num_heads, d_ff):
-        super().__init__()
-        self.attn = MultiHeadSelfAttention(d_model, num_heads)
-        self.ff = nn.Sequential(
-            nn.Linear(d_model, d_ff),
-            nn.GELU(),
-            nn.Dropout(0.1),
-            nn.Linear(d_ff, d_model),
-        )
-        self.norm1 = nn.LayerNorm(d_model)
-        self.norm2 = nn.LayerNorm(d_model)
-
-    def forward(self, x):
-        x = self.norm1(x + self.attn(x))
-        x = self.norm2(x + self.ff(x))
-        return x
-
-class TransformerEncoder(nn.Module):
-    def __init__(self, input_dim, d_model, num_heads, d_ff, num_layers):
-        super().__init__()
-        self.input_proj = nn.Linear(input_dim, d_model)
-        self.blocks = nn.Sequential(*[EncoderBlock(d_model, num_heads, d_ff) for _ in range(num_layers)])
-        self.norm = nn.LayerNorm(d_model)
-        self.head = nn.Linear(d_model, 1)
-
-    def forward(self, x):
-        x = self.input_proj(x)
-        x = self.blocks(x)
-        x = self.norm(x)
-        return self.head(x).squeeze(-1)
+        x = self.dropout1(self.relu1(self.fc1(x)))
+        x = self.dropout2(self.relu2(self.fc2(x)))
+        x = self.fc3(x) # Shape: (num_teams_in_week, 1)
+        return x.squeeze(-1) # Shape: (num_teams_in_week)
 
 class FootballDataset(Dataset):
     def __init__(self, df, ap_df, input_cols, min_teams=25, encoder_path='team_encoder.pkl'):  
@@ -114,6 +72,11 @@ class FootballDataset(Dataset):
         return self.le_team.inverse_transform([encoded_value])[0]
 
 def listMLELoss(y_pred, y_true):
+    if y_pred.dim() == 1:
+        y_pred = y_pred.unsqueeze(0)
+    if y_true.dim() == 1:
+        y_true = y_true.unsqueeze(0)
+    
     sorted_idx = torch.argsort(y_true, dim=1, descending=True)  
     sorted_preds = torch.gather(y_pred, 1, sorted_idx)
     loss = torch.logcumsumexp(sorted_preds, dim=1) - sorted_preds
@@ -254,19 +217,19 @@ if __name__ == "__main__":
                  if col not in ["teamName", "weekNumber", "seasonYear", "nextWeekRank"]]
     
     dataset = FootballDataset(features_df, ap_rank_df, input_cols, min_teams=25)
-    train_loader = DataLoader(dataset, batch_size=1, shuffle=True)
+    # since we expect to train one week at a time, we must be using batch size of 1
+    train_loader = DataLoader(dataset, batch_size=1, shuffle=True) 
 
-    model = TransformerEncoder(
+    model = MLPModel(
         input_dim=len(input_cols),
-        d_model=64, # og: 256 (ideal: 128)
-        num_heads=2, # og: 4 (ideal: 2)
-        d_ff=64, # og: 256 (ideal: 128)
-        num_layers=2 # og: 8 (ideal: 2)
+        hidden_dim1=256,
+        hidden_dim2=128,
+        dropout_rate=0.2
     ).to(device)
     
     optimizer = torch.optim.Adam(model.parameters(), lr=5e-3)  
 
-    num_epochs = 100
+    num_epochs = 50 # Or your desired number of epochs
     for epoch in range(num_epochs):
         print(f"\nEpoch {epoch+1}/{num_epochs}")
         
@@ -278,5 +241,3 @@ if __name__ == "__main__":
             weekly_rankings, weekly_metrics = evaluate(model, train_loader, device, verbose=True)
         else:
             _, _ = evaluate(model, train_loader, device, verbose=False)
-    
-    
